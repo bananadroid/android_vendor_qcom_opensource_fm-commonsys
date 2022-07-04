@@ -70,7 +70,7 @@ import android.os.Message;
 import android.os.PowerManager;
 import android.os.PowerManager.WakeLock;
 import android.os.RemoteException;
-import android.telephony.PhoneStateListener;
+import android.telephony.TelephonyCallback;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.widget.RemoteViews;
@@ -159,6 +159,7 @@ public class FMRadioService extends Service
    private boolean mA2dpDisconnected = false;
    private boolean mA2dpConnected = false;
 
+   private boolean mFmStats = false;
    //Install the death receipient
    private IBinder.DeathRecipient mDeathRecipient;
    private FMDeathRecipient mFMdr;
@@ -238,6 +239,7 @@ public class FMRadioService extends Service
    private boolean mEventReceived = false;
    private boolean isfmOffFromApplication = false;
    private AudioFocusRequest mGainFocusReq;
+   private PhoneStateCallback mPhoneStateCallback;
 
    private AudioRoutingListener mRoutingListener =  null;
    private int mCurrentDevice = AudioDeviceInfo.TYPE_UNKNOWN; // current output device
@@ -262,8 +264,10 @@ public class FMRadioService extends Service
       mPrefs = new FmSharedPreferences(this);
       mCallbacks = null;
       TelephonyManager tmgr = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
-      tmgr.listen(mPhoneStateListener, PhoneStateListener.LISTEN_CALL_STATE |
-                                       PhoneStateListener.LISTEN_DATA_ACTIVITY);
+      if (mPhoneStateCallback == null) {
+         mPhoneStateCallback = new PhoneStateCallback();
+      }
+      tmgr.registerTelephonyCallback(getApplicationContext().getMainExecutor(), mPhoneStateCallback);
       PowerManager pm = (PowerManager)getSystemService(Context.POWER_SERVICE);
       mWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, this.getClass().getName());
       mWakeLock.setReferenceCounted(false);
@@ -381,7 +385,7 @@ public class FMRadioService extends Service
       }
 
       TelephonyManager tmgr = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
-      tmgr.listen(mPhoneStateListener, 0);
+      tmgr.unregisterTelephonyCallback(mPhoneStateCallback);
 
       Log.d(LOGTAG, "onDestroy: unbindFromService completed");
 
@@ -1353,7 +1357,7 @@ public class FMRadioService extends Service
        Intent mediaButtonIntent =
                new Intent(Intent.ACTION_MEDIA_BUTTON).setComponent(fmRadio);
        PendingIntent pi = PendingIntent.getBroadcast(getApplicationContext(), 0,
-                          mediaButtonIntent, 0);
+                          mediaButtonIntent, PendingIntent.FLAG_IMMUTABLE);
        mSession.setMediaButtonReceiver(pi);
 
        mStoppedOnFocusLoss = false;
@@ -1648,13 +1652,12 @@ public class FMRadioService extends Service
 
        // Lets label the recorded audio file as NON-MUSIC so that the file
        // won't be displayed automatically, except for in the playlist.
-       cv.put(MediaStore.Audio.Media.IS_MUSIC, "1");
        cv.put(MediaStore.Audio.Media.DURATION, mSampleLength);
        cv.put(MediaStore.Audio.Media.TITLE, title);
        cv.put(MediaStore.Audio.Media.DATA, file.getAbsolutePath());
        cv.put(MediaStore.Audio.Media.DATE_ADDED, (int) (current / 1000));
        cv.put(MediaStore.Audio.Media.DATE_MODIFIED, (int) (modDate / 1000));
-       cv.put(MediaStore.Audio.Media.MIME_TYPE, "audio/aac_mp4");
+       cv.put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg");
        cv.put(MediaStore.Audio.Media.ARTIST,
                res.getString(R.string.audio_db_artist_name));
        cv.put(MediaStore.Audio.Media.ALBUM,
@@ -1723,24 +1726,16 @@ public class FMRadioService extends Service
    }
 
    private void addToPlaylist(ContentResolver resolver, int audioId, long playlistId) {
-       String[] cols = new String[] {
-               MediaStore.Audio.Media.ALBUM_ID
-       };
        Uri uri = MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId);
-       Cursor cur = resolver.query(uri, cols, null, null, null);
-       final int base;
-       if(cur != null && cur.getCount() != 0) {
-            cur.moveToFirst();
-            base = cur.getInt(0);
-            cur.close();
-       }
-       else {
-            base = 0;
-       }
+
        ContentValues values = new ContentValues();
-       values.put(MediaStore.Audio.Playlists.Members.PLAY_ORDER, Integer.valueOf(base + audioId));
+       values.put(MediaStore.Audio.Playlists.Members.PLAY_ORDER, audioId);
        values.put(MediaStore.Audio.Playlists.Members.AUDIO_ID, audioId);
-       resolver.insert(uri, values);
+       try {
+           resolver.insert(uri, values);
+       } catch (Exception exception) {
+           exception.printStackTrace();
+       }
    }
 
     private void resumeAfterCall() {
@@ -1783,6 +1778,11 @@ public class FMRadioService extends Service
            boolean bTempSpeaker = mSpeakerPhoneOn ; //need to restore SpeakerPhone
            boolean bTempMute = mMuted;// need to restore Mute status
            int bTempCall = mCallStatus;//need to restore call status
+           if (mSession != null && mSession.isActive()) {
+               Log.d(LOGTAG, "onCallStateChanged: State - " + state
+                       + " Session is Active: " + mSession.isActive() );
+               mSession.setActive(false);
+           }
            if (isFmOn() && fmOff()) {
                if((mServiceInUse) && (mCallbacks != null)) {
                    try {
@@ -1810,11 +1810,12 @@ public class FMRadioService extends Service
    }
 
     /* Handle Phone Call + FM Concurrency */
-   private PhoneStateListener mPhoneStateListener = new PhoneStateListener() {
+   private class PhoneStateCallback extends TelephonyCallback implements
+            TelephonyCallback.CallStateListener,
+            TelephonyCallback.DataActivityListener {
       @Override
-      public void onCallStateChanged(int state, String incomingNumber) {
+      public void onCallStateChanged(int state){
           Log.d(LOGTAG, "onCallStateChanged: State - " + state );
-          Log.d(LOGTAG, "onCallStateChanged: incomingNumber - " + incomingNumber );
           fmActionOnCallState(state );
       }
 
@@ -2027,7 +2028,7 @@ public class FMRadioService extends Service
             .setContentTitle(isFmOn() ? getString(R.string.app_name) : "")
             .setContentText(isFmOn() ? getTunedFrequencyString() : "")
             .setContentIntent(PendingIntent.getActivity(this,
-                0, new Intent("com.caf.fmradio.FMRADIO_ACTIVITY"), 0))
+                0, new Intent("com.caf.fmradio.FMRADIO_ACTIVITY"), PendingIntent.FLAG_IMMUTABLE))
             .setOngoing(true)
             .build();
 
@@ -2046,7 +2047,11 @@ public class FMRadioService extends Service
               (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
           if((notificationManager != null)
             && (notificationManager.getNotificationChannel(FMRADIO_NOTIFICATION_CHANNEL) != null)) {
-             notificationManager.deleteNotificationChannel(FMRADIO_NOTIFICATION_CHANNEL);
+             try {
+               notificationManager.deleteNotificationChannel(FMRADIO_NOTIFICATION_CHANNEL);
+             } catch (Exception e) {
+               Log.e(LOGTAG,"exception raised from deleteNotificationChannel");
+             }
           }
       }
    }
@@ -2617,6 +2622,9 @@ public class FMRadioService extends Service
                 /* reset SSR flag */
            mIsSSRInProgressFromActivity = false;
          }
+
+         if (mReceiver != null)
+            mFmStats = mReceiver.getFmStatsProp();
       }
       return(bStatus);
    }
@@ -4098,16 +4106,13 @@ public class FMRadioService extends Service
    }
 
    boolean getFmStatsProp() {
-          if(mReceiver != null)
-             return mReceiver.getFmStatsProp();
-          else
-             return false;
+          return mFmStats;
    }
 
    private void setAlarmSleepExpired (long duration) {
        Intent i = new Intent(SLEEP_EXPIRED_ACTION);
        AlarmManager am = (AlarmManager)getSystemService(Context.ALARM_SERVICE);
-       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, 0);
+       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, PendingIntent.FLAG_IMMUTABLE);
        Log.d(LOGTAG, "delayedStop called" + SystemClock.elapsedRealtime() + duration);
        am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + duration, pi);
        mSleepActive = true;
@@ -4115,33 +4120,33 @@ public class FMRadioService extends Service
    private void cancelAlarmSleepExpired() {
        Intent i = new Intent(SLEEP_EXPIRED_ACTION);
        AlarmManager am = (AlarmManager)getSystemService(Context.ALARM_SERVICE);
-       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, 0);
+       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, PendingIntent.FLAG_IMMUTABLE);
        am.cancel(pi);
        mSleepActive = false;
    }
    private void setAlarmRecordTimeout(long duration) {
        Intent i = new Intent(RECORD_EXPIRED_ACTION);
        AlarmManager am = (AlarmManager)getSystemService(Context.ALARM_SERVICE);
-       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, 0);
+       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, PendingIntent.FLAG_IMMUTABLE);
        Log.d(LOGTAG, "delayedStop called" + SystemClock.elapsedRealtime() + duration);
        am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + duration, pi);
    }
    private void cancelAlarmRecordTimeout() {
        Intent i = new Intent(RECORD_EXPIRED_ACTION);
        AlarmManager am = (AlarmManager)getSystemService(Context.ALARM_SERVICE);
-       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, 0);
+       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, PendingIntent.FLAG_IMMUTABLE);
        am.cancel(pi);
    }
    private void setAlarmDelayedServiceStop() {
        Intent i = new Intent(SERVICE_DELAYED_STOP_ACTION);
        AlarmManager am = (AlarmManager)getSystemService(Context.ALARM_SERVICE);
-       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, 0);
+       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, PendingIntent.FLAG_IMMUTABLE);
        am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + IDLE_DELAY, pi);
    }
    private void cancelAlarmDealyedServiceStop() {
        Intent i = new Intent(SERVICE_DELAYED_STOP_ACTION);
        AlarmManager am = (AlarmManager)getSystemService(Context.ALARM_SERVICE);
-       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, 0);
+       PendingIntent pi = PendingIntent.getBroadcast(this, 0, i, PendingIntent.FLAG_IMMUTABLE);
        am.cancel(pi);
    }
    private void cancelAlarms() {

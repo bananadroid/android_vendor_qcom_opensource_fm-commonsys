@@ -29,7 +29,7 @@
 
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.caf.fmradio" >
-    <uses-sdk android:minSdkVersion="28"  android:targetSdkVersion="28"/>
+    <uses-sdk android:minSdkVersion="31"  android:targetSdkVersion="31"/>
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
@@ -38,10 +38,11 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.CHANGE_COMPONENT_ENABLED_STATE"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS_FULL"/>
     <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS" />
@@ -53,6 +54,7 @@
     <uses-permission android:name="android.permission.MANAGE_USERS"/>
 
     <application
+        android:requestLegacyExternalStorage="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:allowTaskReparenting="true"
@@ -72,7 +74,8 @@
             android:launchMode="singleTask"
             android:theme="@style/FMTheme"
             android:configChanges="keyboardHidden|orientation|screenSize"
-            android:excludeFromRecents="false" >
+            android:excludeFromRecents="false"
+            android:exported="true" >
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -86,7 +89,8 @@
 
         </activity>
 
-        <receiver android:name="com.caf.fmradio.FMMediaButtonIntentReceiver">
+        <receiver android:name="com.caf.fmradio.FMMediaButtonIntentReceiver"
+                  android:exported="true" >
             <intent-filter>
                  <action android:name="android.media.AUDIO_BECOMING_NOISY" />
             </intent-filter>
@@ -103,6 +107,7 @@
         </activity>
 
         <activity android:name=".FMStats"
+                  android:exported="true"
             android:label="@string/test_menu">
 
             <intent-filter>
@@ -112,6 +117,7 @@
         </activity>
 
         <activity android:name=".FmTags"
+                  android:exported="true"
             android:label="@string/rt_plus_tags">
 
             <intent-filter>
